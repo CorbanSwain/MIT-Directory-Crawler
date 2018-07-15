@@ -18,10 +18,31 @@ re_special = {'name': (re_name_program,
               'url': (re.compile(r'(?<=href=[\"\'])(?P<url>.*)'
                                  r'(?=[\"\'])'),
                       ['url', ])}
-metadata = {'entry_source': lambda a: in_filename,
-            'entry_in mit_directory?': lambda a: 'TRUE' if a else 'FALSE',
-            'entry_add_date': lambda a: datetime.now().strftime('%m/%d/%Y')}
+metadata = {'entry_source': lambda a, b: in_filename,
+            'entry_in mit_directory?': lambda a, b: 'TRUE' if a else 'FALSE',
+            'entry_add_date': lambda a, b: datetime.now().strftime('%m/%d/%Y'),
+            'search_term': lambda a, b: b}
 address_fmt = 'http://web.mit.edu/bin/cgicso?options=general&query=%s'
+
+preferred_order = ['first_name',
+                   'middle_name',
+                   'last_name',
+                   'email',
+                   'department',
+                   'entry_source',
+                   'year',
+                   'title',
+                   'office',
+                   'school',
+                   'url',
+                   'phone',
+                   'phone2',
+                   'Fax',
+                   'address',
+                   'address2',
+                   'search_term',
+                   'entry_in mit_directory?',
+                   'entry_add_date']
 
 results = {}
 result_keys = set()
@@ -58,6 +79,7 @@ for i, term in enumerate(search_terms):
     if m:
         txt = m.group(0)
         txt = txt.replace('&amp;', '&')
+        txt = txt.replace('&#39;', '\'')
         for l in txt.strip().split('\n'):
             if ':' in l:
                 kv = l.split(':')
@@ -73,18 +95,17 @@ for i, term in enumerate(search_terms):
                     lns[k] = v
     is_match = bool(len(lns))
     for k, v in metadata.items():
-        lns[k] = v(is_match)
+        lns[k] = v(is_match, term)
     results[term] = lns
     result_keys = result_keys.union(lns.keys())
     match_count += 1 if is_match else 0
 
-pp.pprint(result_keys)
 if results:
-    result_keys = list(result_keys)
-    result_keys.insert(0, 'search_term')
+    extra_result_keys = [k for k in result_keys if k not in preferred_order]
+    result_keys = preferred_order + extra_result_keys
     results_table = [result_keys]
     for k, v in results.items():
-        entry = [k, ] + [v[rk] if rk in v else '' for rk in result_keys[1:]]
+        entry = [v[rk] if rk in v else '' for rk in result_keys]
         results_table.append(entry)
         # pp.pprint(results_table)
     with open(in_filename.split('.')[0] + '.out', 'w+') as fle:
