@@ -2,66 +2,92 @@ import requests
 import re
 import pprint as pp
 import time
+from datetime import datetime
 
-in_filename = 'bgsa_mailman_roster.txt'
+in_filename = 'example_list.txt'
 with open(in_filename, 'r') as fle:
     search_terms = [l.strip() for l in fle.readlines()]
-re_program = re.compile(r'<PRE>\s+name: '
-                        '(?P<last_name>.*),\s+(?P<first_name>\S*?)'
-                        '(\s+(?P<middle_name>\S*?)\.?)?\\n(.*\\n)*?'
-                        '(\s*email:.*?(?P<email>\w+@\w+?\.\w+).*\\n)?(.*\\n)*?'
-                        '(\s*department: (?P<department>.*?)\\n)?(.*\\n)*?'
-                        '(\s*school: (?P<school>.*?)\s*\\n)?(.*\\n)*?'
-                        '(\s*year: (?P<year>.*?)\\n)?(.*\\n)*?'
-                        '(\s*title: (?P<title>.*?)\\n)?')
-match_group_keys = ['first_name', 'middle_name', 'last_name', 'email',
-                    'department', 'school', 'year', 'title']
+re_program = re.compile(r'(?<=<PRE>)(?:.*\n)*(?=</PRE>)')
+re_name_program = re.compile(r'(?P<last_name>.*),\s'
+                             r'(?P<first_name>\S*)'
+                             r'(\s+(?P<middle_name>.+)\.?)?')
+re_email_program = re.compile(r'(?P<email>\w+@\w+?\.\w+)')
+re_special = {'name': (re_name_program,
+                       ['first_name', 'middle_name', 'last_name']),
+              'email': (re_email_program, ['email', ]),
+              'url': (re.compile(r'(?<=href=[\"\'])(?P<url>.*)'
+                                 r'(?=[\"\'])'),
+                      ['url', ])}
+metadata = {'entry_source': lambda a: in_filename,
+            'entry_in mit_directory?': lambda a: 'TRUE' if a else 'FALSE',
+            'entry_add_date': lambda a: datetime.now().strftime('%m/%d/%Y')}
 address_fmt = 'http://web.mit.edu/bin/cgicso?options=general&query=%s'
 
 results = {}
-repeats = 1
+result_keys = set()
 match_count = 0
-for _ in range(repeats):
-    for i, term in enumerate(search_terms):
-        tries = 0
-        while True:
-            tries += 1
-            r = requests.get(address_fmt % term)
-            code = r.status_code
-            if code == 200:
+for i, term in enumerate(search_terms):
+    tries = 0
+    while True:
+        tries += 1
+        r = requests.get(address_fmt % term)
+        code = r.status_code
+        if code == 200:
+            break
+        elif code == 500:
+            pause_time = 1
+            pp.pprint('Too many requests, taking a %3.1f minute pause.'
+                      % pause_time)
+            time.sleep(pause_time * 60)
+        else:
+            if tries > 5:
+                pp.pprint(('Unknown Status Code: %d ... Search: \'%s\''
+                           ' ... continuing to next search.')
+                          % (code, term))
                 break
-            elif code == 500:
-                pause_time = 1
-                pp.pprint('Too many requests, taking a %3.1f minute pause.'
-                          % pause_time)
-                time.sleep(pause_time * 60)
             else:
-                if tries > 5:
-                    pp.pprint(('Unknown Status Code: %d ... Search: \'%s\''
-                               ' ... continuing to next search.')
-                              % (code, term))
-                    break
+                pp.pprint(('Unknown Status Code: %d ... Search: \'%s\''
+                           ' ... trying again.')
+                          % (code, term))
+                time.sleep(1)
+    m = re_program.search(r.text)
+    pp.pprint('%3d | %3d (/ %3d) --- EC: %3d --- \'%s\''
+              % (i, match_count, len(search_terms), code, term))
+
+    lns = {}
+    if m:
+        txt = m.group(0)
+        txt = txt.replace('&amp;', '&')
+        for l in txt.strip().split('\n'):
+            if ':' in l:
+                kv = l.split(':')
+                k, v = map(lambda x: x.strip(), (kv[0], ':'.join(kv[1:])))
+                if k in re_special:
+                    rpgm, sub_keys = re_special[k]
+                    rmtch = rpgm.search(v)
+                    for sub_k in sub_keys:
+                        if rmtch and sub_k in rmtch.groupdict() \
+                                and rmtch.group(sub_k):
+                            lns[sub_k] = rmtch.group(sub_k)
                 else:
-                    pp.pprint(('Unknown Status Code: %d ... Search: \'%s\''
-                               ' ... trying again.')
-                              % (code, term))
-                    time.sleep(1)
-        m = re_program.search(r.text)
-        pp.pprint('%3d | %3d (/ %3d) --- EC: %3d --- \'%s\''
-                  % (i, match_count, len(search_terms), code, term))
-        results[term] = [m.group(k) if m
-                         and k in m.groupdict()
-                         and m.group(k)
-                         else ''
-                         for k in match_group_keys]
-        match_count += 1 if m else 0
-   
-if results: 
-    results = [[k,] + v for k, v in results.items()]
-    match_group_keys.insert(0, 'search_term')
-    results.insert(0, match_group_keys)
-    pp.pprint(results)
-    with open('output.tsv', 'w+') as fle:
-        [fle.write('\t'.join(l) + '\n') for l in results]
+                    lns[k] = v
+    is_match = bool(len(lns))
+    for k, v in metadata.items():
+        lns[k] = v(is_match)
+    results[term] = lns
+    result_keys = result_keys.union(lns.keys())
+    match_count += 1 if is_match else 0
+
+pp.pprint(result_keys)
+if results:
+    result_keys = list(result_keys)
+    result_keys.insert(0, 'search_term')
+    results_table = [result_keys]
+    for k, v in results.items():
+        entry = [k, ] + [v[rk] if rk in v else '' for rk in result_keys[1:]]
+        results_table.append(entry)
+        # pp.pprint(results_table)
+    with open(in_filename.split('.')[0] + '.out', 'w+') as fle:
+        [fle.write('\t'.join(l) + '\n') for l in results_table]
 
 

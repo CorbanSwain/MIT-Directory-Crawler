@@ -4,3 +4,5 @@
 # add this ans main script
 !.gitignore
 !directory_parse.py
+!example_list.out
+!example_list.txt
