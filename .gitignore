@@ -1,0 +1,6 @@
+# ignore all files
+*
+
+# add this ans main script
+!.gitignore
+!directory_parse.py
